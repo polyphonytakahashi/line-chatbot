@@ -7,19 +7,44 @@ const client = new Client({
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+/** ── カフェポリフォニー関連ワード ── */
 const TERMS = [
-  "就労継続支援A型","就労継続支援B型","施設外就労","施設外支援","一般就労","通過施設",
-  "Web制作","デザイン","ECサイト制作","データ入力","清掃","飲食店業務","ミシン軽作業",
-  "ソーシャルワーク","相談支援","計画相談","多様性","生き方","ソーシャルキャピタル（社会関係資本）",
-  "大阪市","大阪市西区南堀江","一般社団法人ダイアロゴス",
-  "障害福祉サービス","生活困窮","アディクション","刑余者支援","発達障害支援","職業センター"
+  "南堀江の隠れ家カフェ＆バル カフェポリフォニー",
+  "ランチメニュー", "追加オプション", "営業時間", "定休日",
+  "アクセス", "電話", "予約", "おすすめスイーツ", "ドリンクメニュー"
 ];
-const isRelated = (t)=>/関連ワード|キーワード|ハッシュタグ|ポリフォニー|就労支援/i.test((t||"").trim());
-const fmt = (arr)=>`【ポリフォニー関連ワード】
-${arr.map(t=>`・${t}`).join("\n")}
 
-（例）知りたい分野を送ってください：
-「A型の仕事内容」「B型の訓練」「施設外就労とは？」`;
+const isRelated = (t) =>
+  /関連ワード|キーワード|メニュー|営業時間|アクセス|予約|ランチ|電話/i.test((t || "").trim());
+
+const fmt = (arr) =>
+  `【カフェポリフォニー関連ワード】
+${arr.map((t) => `・${t}`).join("\n")}
+
+（例）「ランチメニュー」「営業時間」「アクセス」「電話」などを送ってください。`;
+
+/** ── 固定返答（よく聞かれる情報）── */
+const FIXED = {
+  "店舗名": "南堀江の隠れ家カフェ＆バル　カフェポリフォニー",
+  "営業時間": "ランチ 11:30 - 13:30 (L.O. 13:00)\n※ランチは無くなり次第終了となります。",
+  "アクセス": "〒550-0015 大阪市西区南堀江3-15-7 堀江ヴィラ 1F\n最寄駅：四ツ橋駅から徒歩5分。",
+  "電話": "TEL: 06-6606-9561",
+  "ランチメニュー": `【ランチメニュー】（税込）
+1. 定番ランチセット（ご飯・味噌汁付）
+ ・低温調理トンテキ定食 ¥1,000（ダブル ¥1,500）
+ ・特製からあげ定食 ¥1,000
+2. ヘルシーランチ（ご飯・味噌汁付）
+ ・低温調理のバンバンジー定食 ¥1,000
+ ・低温調理のよだれ鶏定食 ¥1,000
+3. 本日の日替わりランチ
+ ・日替わりランチ ¥1,000
+※ランチは無くなり次第終了`,
+  "追加オプション": `【追加オプション】
+・ランチドリンク ¥200（コーヒー、紅茶、オレンジジュース など）
+・本日のデザート ¥200（例：自家製イチゴジャムのヨーグルト）`,
+  "予約": "ご予約はお電話（06-6606-9561）またはLINEから承ります。",
+  "定休日": "毎週火曜日が定休日です。",
+};
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(200).send("ok");
@@ -35,29 +60,43 @@ export default async function handler(req, res) {
 
 async function handleEvent(event) {
   if (event.type !== "message" || event.message.type !== "text") return;
-  const text = event.message.text;
+  const text = event.message.text.trim();
+  console.log("[webhook] recv:", text);
 
+  // 固定返答
+  if (FIXED[text]) {
+    return client.replyMessage(event.replyToken, { type: "text", text: FIXED[text] });
+  }
+
+  // 関連ワードモード
   if (isRelated(text)) {
     return client.replyMessage(event.replyToken, { type: "text", text: fmt(TERMS) });
   }
 
+  // ChatGPT応答
   try {
     const resp = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
-        { role: "system", content: "あなたはLINE向け日本語アシスタント。簡潔で丁寧に答えてください。" },
-        { role: "user", content: text }
-      ]
+        {
+          role: "system",
+          content:
+            "あなたは『南堀江の隠れ家カフェ＆バル カフェポリフォニー』の案内アシスタントです。"+
+            "メニュー、営業時間、アクセス、予約、電話番号などを丁寧に案内してください。"
+        },
+        { role: "user", content: text },
+      ],
     });
     const aiText =
       resp.output_text?.trim() ||
       (resp.output?.[0]?.content?.[0]?.text?.value ?? "すみません、うまく答えられませんでした。");
+
     return client.replyMessage(event.replyToken, { type: "text", text: aiText });
   } catch (err) {
-    console.error("[api/webhook] OpenAI error:", err);
+    console.error("[webhook] OpenAI error:", err);
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "（AI応答でエラーが発生しました）\n「関連ワード」と送るとポリフォニーの用語リストを表示できます。"
+      text: "（AI応答でエラーが出ました）\n「ランチメニュー」「営業時間」「アクセス」「電話」などを送ってみてください。",
     });
   }
 }
