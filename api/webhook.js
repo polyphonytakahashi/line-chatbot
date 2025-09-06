@@ -16,7 +16,7 @@ const STORE_NAME = "南堀江の隠れ家カフェ＆バル　カフェポリフ
  *  https://<YOUR-PROJECT>.vercel.app/menu.png で配信されます。
  */
 const IMG = {
-  menu: "https://polyphonytakahashis-projects.vercel.app/menu.png", // ←ここをあなたのURLに差し替え
+  menu: "https://line-chatbot-tau.vercel.app/menu.png/menu.png", // 
 };
 
 /** ── 固定返答（ここを直すと全体が最新化されます） ── */
