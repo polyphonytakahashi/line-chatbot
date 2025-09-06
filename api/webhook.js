@@ -150,8 +150,8 @@ async function handleEvent(event) {
       type: "location",
       title: "カフェポリフォニー",
       address: "大阪市西区南堀江3-15-7 堀江ヴィラ 1F",
-      latitude: 34.6711397,   // ←店舗の緯度
-      longitude: 135.4876758, // ←店舗の経度
+      latitude: 34.6711232,   // ←店舗の緯度
+      longitude: 135.4877019, // ←店舗の経度
     });
   }
 
