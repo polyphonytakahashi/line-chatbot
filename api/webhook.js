@@ -1,3 +1,4 @@
+// api/webhook.js
 import { Client } from "@line/bot-sdk";
 import OpenAI from "openai";
 
@@ -10,12 +11,20 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 /** ── 店舗定義 ── */
 const STORE_NAME = "南堀江の隠れ家カフェ＆バル　カフェポリフォニー";
 
-/** ── 固定返答（ここだけ直せば全体が最新化されます） ── */
+/** ── 公開済みのメニュー画像URL（必ず HTTPS）──
+ *  例：public/menu.png をリポジトリに追加すると
+ *  https://<YOUR-PROJECT>.vercel.app/menu.png で配信されます。
+ */
+const IMG = {
+  menu: "https://YOUR-PROJECT.vercel.app/menu.png", // ←ここをあなたのURLに差し替え
+};
+
+/** ── 固定返答（ここを直すと全体が最新化されます） ── */
 const FIXED = {
   "店舗名": STORE_NAME,
   "営業時間":
     "ランチ 11:30 - 13:30 (L.O. 13:00)\n※ランチメニューは無くなり次第終了となります。\n※価格はすべて税込み。",
-  "定休日": "不定期となります。",
+  "定休日": "不定期です。",
   "アクセス":
     "〒550-0015 大阪市西区南堀江3-15-7 堀江ヴィラ 1F\n最寄駅：地下鉄千日前線 桜川駅より徒歩6分。",
   "電話": "TEL: 06-6606-9561",
@@ -48,15 +57,23 @@ const relatedList = () =>
   TERMS.map(t => `・${t}`).join("\n") +
   `\n\n（例）「ランチ」「メニュー」「営業時間」「アクセス」「電話」などを送ってください。`;
 
-/** 前処理＆マッチ系 */
+/** ── 前処理＆マッチ ── */
 const norm = (s="") => s.toLowerCase().replace(/\s+/g,"").replace(/[！!？?。、・,.]/g,"");
 const anyMatch = (text, patterns) => patterns.some(p => p.test(norm(text||"")));
 
-/** あいさつ検出（AIを通さない） */
+/** あいさつ（AIに回さない） */
 const isGreeting = (t="") =>
   anyMatch(t, [/こんにちは|こんちは|こんにちわ/, /はじめまして|初めまして/, /おはよう/, /こんばんは/, /hi|hello|hey/]);
 
-/** 意図マップ（部分一致OK） */
+/** メニュー画像を見せて欲しいニュアンス */
+const wantsMenuImage = (t="") =>
+  anyMatch(t, [
+    /(ﾒﾆｭｰ|メニュー|menu)/,
+    /(何がある|なにがある|何ある|なにある|ごはん|フード|食事)/,
+    /(見せて|教えて|おしえて|ありますか|ある？)/,
+  ]);
+
+/** 意図マップ（部分一致OK：固定テキスト返答） */
 const INTENTS = [
   { key: "ランチメニュー", patterns: [/ランチ/, /(ﾒﾆｭｰ|メニュー|めにゅー)/, /(ごはん|フード|食事|昼|昼飯)/, /(日替|今日).*(おすすめ|本日)/, /(おすすめ).*(メニュー|ﾒﾆｭｰ|ランチ)/, /(見せて|教えて|おしえて).*(メニュー|ﾒﾆｭｰ|ランチ)/], replyKey: "ランチメニュー" },
   { key: "追加オプション", patterns: [/(追加|オプション|セット)/, /(ﾄﾞﾘﾝｸ|ドリンク|飲み物).*(ｾｯﾄ|セット|追加)/, /(ﾃﾞｻﾞｰﾄ|デザート|スイーツ)/], replyKey: "追加オプション" },
@@ -68,7 +85,7 @@ const INTENTS = [
   { key: "関連ワード", patterns: [/(関連|ﾜｰﾄﾞ|キーワード|keyword|ﾍﾙﾌﾟ|help|一覧)/], reply: () => relatedList() },
 ];
 
-/** AIに渡す “確定情報” を文字列化（逸脱防止用コンテキスト） */
+/** AIに渡す“確定情報” */
 const FACTS = `
 【店舗名】${FIXED["店舗名"]}
 【住所】${FIXED["アクセス"]}
@@ -78,8 +95,8 @@ const FACTS = `
 ${FIXED["ランチメニュー"]}
 
 【ルール】
-- 回答は上記の事実のみから作成してください。推測・創作は禁止。
-- 事実にない項目を聞かれたら「公式情報をご確認ください」と案内してください。
+- 回答は上記の事実のみから作成。推測・創作は禁止。
+- 事実にない項目は「公式情報をご確認ください」と案内。
 - 価格は税込み。ランチは無くなり次第終了。
 `;
 
@@ -100,12 +117,12 @@ async function handleEvent(event) {
   const text = (event.message.text || "").trim();
   console.log("[recv]", text);
 
-  /** 0) 挨拶はAIを通さず“安全なウェルカム”で返す */
+  /** 0) あいさつ → 安全なウェルカム（AIに回さない） */
   if (isGreeting(text)) {
     const welcome =
       `こんにちは！『${STORE_NAME}』のご案内です。\n` +
       `・ランチ →「ランチ」\n・追加オプション →「追加オプション」\n・営業時間/定休日 →「営業時間」「定休日」\n・アクセス/電話/予約 →「アクセス」「電話」「予約」\n` +
-      `ご希望の項目をメッセージでお送りください。`;
+      `メニュー画像をご希望なら「メニュー見せて」とお送りください。`;
     return client.replyMessage(event.replyToken, {
       type: "text",
       text: welcome,
@@ -115,9 +132,18 @@ async function handleEvent(event) {
           { type: "action", action: { type: "message", label: "追加オプション", text: "追加オプション" } },
           { type: "action", action: { type: "message", label: "営業時間", text: "営業時間" } },
           { type: "action", action: { type: "message", label: "アクセス", text: "アクセス" } },
-          { type: "action", action: { type: "message", label: "電話", text: "電話" } },
+          { type: "action", action: { type: "message", label: "メニュー画像", text: "メニュー見せて" } },
         ],
       },
+    });
+  }
+
+  /** 0-B) メニュー画像の要望 → 画像メッセージで返す（最優先） */
+  if (wantsMenuImage(text)) {
+    return client.replyMessage(event.replyToken, {
+      type: "image",
+      originalContentUrl: IMG.menu,
+      previewImageUrl: IMG.menu,
     });
   }
 
@@ -138,25 +164,18 @@ async function handleEvent(event) {
     return client.replyMessage(event.replyToken, { type: "text", text: FIXED[text] });
   }
 
-  /** 3) どうしてもAIが必要な質問だけ、事実コンテキスト付きで回答 */
+  /** 3) それ以外は AI（確定情報を同梱、温度低め） */
   try {
     const resp = await openai.responses.create({
       model: "gpt-4o-mini",
-      // ぶれ防止のため出力安定寄り
       temperature: 0.1,
       input: [
-        {
-          role: "system",
-          content:
-            "あなたはカフェの案内アシスタントです。ユーザーに誤情報を出さないことが最優先。"
-        },
+        { role: "system", content: "あなたはカフェの案内アシスタント。誤情報の出力は禁止です。" },
         {
           role: "user",
           content:
-            `以下の「確定情報」の範囲だけで、質問に答えてください。` +
-            `不明な点は「公式情報をご確認ください」と案内してください。\n\n` +
-            FACTS +
-            `\n\n【ユーザーの質問】\n${text}`
+            `以下の「確定情報」の範囲だけで回答してください。不明な点は「公式情報をご確認ください」と案内してください。\n\n` +
+            FACTS + `\n\n【ユーザーの質問】\n${text}`
         },
       ],
     });
@@ -169,7 +188,7 @@ async function handleEvent(event) {
     console.error("[openai]", err?.name, err?.message);
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "（AI応答でエラーが出ました）\n「ランチ」「営業時間」「アクセス」「電話」「予約」などキーワードでお試しください。",
+      text: "（AI応答でエラーが出ました）\n「ランチ」「営業時間」「アクセス」「電話」「予約」「メニュー見せて」などでお試しください。",
     });
   }
 }
