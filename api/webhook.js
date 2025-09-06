@@ -11,15 +11,16 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 /** ── 店舗定義 ── */
 const STORE_NAME = "南堀江の隠れ家カフェ＆バル　カフェポリフォニー";
 
-/** ── 公開済みのメニュー画像URL（必ず HTTPS）──
- *  例：public/menu.png をリポジトリに追加すると
+/** ── 公開画像URL（必ず HTTPS / プロジェクトの本番ドメイン）──
+ *  例：public/menu.png を追加すると
  *  https://<YOUR-PROJECT>.vercel.app/menu.png で配信されます。
+ *  必ず「line-chatbot-xxxx.vercel.app」等の “プロジェクトドメイン” を使ってください。
  */
 const IMG = {
-  menu: "https://line-chatbot-tau.vercel.app/menu.png/menu.png", // 
+  menu: "https://line-chatbot-tau.vercel.app/menu.png", // ←あなたの本番ドメインに差し替え
 };
 
-/** ── 固定返答（ここを直すと全体が最新化されます） ── */
+/** ── 固定返答（ここを直せば全体が最新化されます） ── */
 const FIXED = {
   "店舗名": STORE_NAME,
   "営業時間":
@@ -65,7 +66,7 @@ const anyMatch = (text, patterns) => patterns.some(p => p.test(norm(text||"")));
 const isGreeting = (t="") =>
   anyMatch(t, [/こんにちは|こんちは|こんにちわ/, /はじめまして|初めまして/, /おはよう/, /こんばんは/, /hi|hello|hey/]);
 
-/** メニュー画像を見せて欲しいニュアンス */
+/** メニュー画像が欲しいニュアンス */
 const wantsMenuImage = (t="") =>
   anyMatch(t, [
     /(ﾒﾆｭｰ|メニュー|menu)/,
@@ -73,7 +74,11 @@ const wantsMenuImage = (t="") =>
     /(見せて|教えて|おしえて|ありますか|ある？)/,
   ]);
 
-/** 意図マップ（部分一致OK：固定テキスト返答） */
+/** アクセス（地図）を知りたいニュアンス → 位置情報を返す */
+const wantsPlace = (t="") =>
+  anyMatch(t, [/(アクセス|場所|どこ|地図|map|行き方|道順|住所|最寄|駅|南堀江|桜川)/]);
+
+/** 意図マップ（固定テキスト返答） */
 const INTENTS = [
   { key: "ランチメニュー", patterns: [/ランチ/, /(ﾒﾆｭｰ|メニュー|めにゅー)/, /(ごはん|フード|食事|昼|昼飯)/, /(日替|今日).*(おすすめ|本日)/, /(おすすめ).*(メニュー|ﾒﾆｭｰ|ランチ)/, /(見せて|教えて|おしえて).*(メニュー|ﾒﾆｭｰ|ランチ)/], replyKey: "ランチメニュー" },
   { key: "追加オプション", patterns: [/(追加|オプション|セット)/, /(ﾄﾞﾘﾝｸ|ドリンク|飲み物).*(ｾｯﾄ|セット|追加)/, /(ﾃﾞｻﾞｰﾄ|デザート|スイーツ)/], replyKey: "追加オプション" },
@@ -138,8 +143,21 @@ async function handleEvent(event) {
     });
   }
 
-  /** 0-B) メニュー画像の要望 → 画像メッセージで返す（最優先） */
+  /** 0-A) アクセス系 → 位置情報（地図UIが開きます） */
+  if (wantsPlace(text)) {
+    console.log("[place] send location");
+    return client.replyMessage(event.replyToken, {
+      type: "location",
+      title: "カフェポリフォニー",
+      address: "大阪市西区南堀江3-15-7 堀江ヴィラ 1F",
+      latitude: 34.67062,   // ←店舗の緯度に調整してください
+      longitude: 135.49155, // ←店舗の経度に調整してください
+    });
+  }
+
+  /** 0-B) メニュー画像の要望 → 画像メッセージで返す（ログ付き） */
   if (wantsMenuImage(text)) {
+    console.log("[menu image send]", IMG.menu);
     return client.replyMessage(event.replyToken, {
       type: "image",
       originalContentUrl: IMG.menu,
