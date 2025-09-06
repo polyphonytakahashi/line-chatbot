@@ -42,6 +42,51 @@ function formatRelatedTerms(terms) {
   ].join("\n");
 }
 
+// 追加: ざっくりログ
+const log = (...a) => console.log("[webhook]", ...a);
+
+async function handleEvent(event) {
+  // テキスト以外は無視
+  if (event.type !== "message" || event.message.type !== "text") return;
+
+  const userText = event.message.text;
+  log("recv:", userText);
+
+  // 1) 関連ワードモード（OpenAIなし）
+  if (isRelatedQuery(userText)) {
+    const text = formatRelatedTerms(POLYPHONY_RELATED_TERMS);
+    return client.replyMessage(event.replyToken, { type: "text", text });
+  }
+
+  // 2) 通常はOpenAIへ。ただし失敗しても必ず返信する
+  try {
+    const resp = await openai.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: "LINE向け日本語アシスタント。簡潔に丁寧に。" },
+        { role: "user", content: userText }
+      ],
+    });
+
+    const aiText =
+      resp.output_text?.trim() ||
+      (resp.output?.[0]?.content?.[0]?.text?.value ??
+        "すみません、うまく答えられませんでした。");
+    return client.replyMessage(event.replyToken, { type: "text", text: aiText });
+  } catch (err) {
+    console.error("OpenAI error:", err);
+    // フォールバック（確実に1本返す）
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "（ただいまAI応答でエラーが出ました）\n「関連ワード」と送るとポリフォニーの用語リストを表示できます。",
+    });
+  }
+}
+
+
+
+
+
 /** ── ② Express/Webhook ── */
 const app = express();
 app.get("/", (_, res) => res.send("ok"));
