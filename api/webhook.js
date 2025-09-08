@@ -8,19 +8,48 @@ const client = new Client({
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-/** ── 店舗定義 ── */
+/** ===== 店舗定義 / 画像URL / 位置情報 ===== */
 const STORE_NAME = "南堀江の隠れ家カフェ＆バル　カフェポリフォニー";
 
-/** ── 公開画像URL（必ず HTTPS / プロジェクトの本番ドメイン）──
- *  例：public/menu.png を追加すると
- *  https://<YOUR-PROJECT>.vercel.app/menu.png で配信されます。
- *  必ず「line-chatbot-xxxx.vercel.app」等の “プロジェクトドメイン” を使ってください。
- */
 const IMG = {
-  menu: "https://line-chatbot-tau.vercel.app/menu.png", // ←あなたの本番ドメインに差し替え
+  // ←あなたの本番ドメインに差し替え
+  menu: "https://line-chatbot-tau.vercel.app/menu.png",
 };
 
-/** ── 固定返答（ここを直せば全体が最新化されます） ── */
+const PLACE = {
+  title: "カフェポリフォニー",
+  address: "大阪市西区南堀江3-15-7 堀江ヴィラ 1F",
+  // ←実値に修正してください（環境変数でも上書き可）
+  lat: Number(process.env.PLACE_LAT) || 34.6711232,
+  lng: Number(process.env.PLACE_LNG) || 135.4877019,
+};
+
+const BUILD = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local";
+
+/** ===== 手動対応モード（ハンドオフ）設定 =====
+ * - 簡易メモリ（リスタートで消える可能性あり）
+ * - TTL 既定 90 分（環境変数 HANDOFF_TTL_MIN で上書き）
+ */
+const HANDOFF_TTL_MIN = Number(process.env.HANDOFF_TTL_MIN) || 90;
+const handoffMem = new Map(); // key=userId, val={until:number}
+
+function handoffGet(userId) {
+  const v = handoffMem.get(userId);
+  if (!v) return null;
+  if (Date.now() > v.until) {
+    handoffMem.delete(userId);
+    return null;
+  }
+  return v;
+}
+function handoffSet(userId, minutes = HANDOFF_TTL_MIN) {
+  handoffMem.set(userId, { until: Date.now() + minutes * 60 * 1000 });
+}
+function handoffClear(userId) {
+  handoffMem.delete(userId);
+}
+
+/** ===== 固定返答 ===== */
 const FIXED = {
   "店舗名": STORE_NAME,
   "営業時間":
@@ -45,7 +74,7 @@ const FIXED = {
 ・本日のデザート ¥200（例：自家製イチゴジャムのヨーグルト）`,
 };
 
-/** ── “関連ワード”の表示 ── */
+/** ===== 関連ワード表示 ===== */
 const TERMS = [
   STORE_NAME,
   "ランチメニュー", "追加オプション",
@@ -58,15 +87,15 @@ const relatedList = () =>
   TERMS.map(t => `・${t}`).join("\n") +
   `\n\n（例）「ランチ」「メニュー」「営業時間」「アクセス」「電話」などを送ってください。`;
 
-/** ── 前処理＆マッチ ── */
+/** ===== テキスト前処理＆マッチ ===== */
 const norm = (s="") => s.toLowerCase().replace(/\s+/g,"").replace(/[！!？?。、・,.]/g,"");
 const anyMatch = (text, patterns) => patterns.some(p => p.test(norm(text||"")));
 
-/** あいさつ（AIに回さない） */
+/** あいさつ */
 const isGreeting = (t="") =>
   anyMatch(t, [/こんにちは|こんちは|こんにちわ/, /はじめまして|初めまして/, /おはよう/, /こんばんは/, /hi|hello|hey/]);
 
-/** メニュー画像が欲しいニュアンス */
+/** メニュー画像 */
 const wantsMenuImage = (t="") =>
   anyMatch(t, [
     /(ﾒﾆｭｰ|メニュー|menu)/,
@@ -74,23 +103,29 @@ const wantsMenuImage = (t="") =>
     /(見せて|教えて|おしえて|ありますか|ある？)/,
   ]);
 
-/** アクセス（地図）を知りたいニュアンス → 位置情報を返す */
+/** アクセス（地図） */
 const wantsPlace = (t="") =>
   anyMatch(t, [/(アクセス|場所|どこ|地図|map|行き方|道順|住所|最寄|駅|南堀江|桜川)/]);
 
-/** 意図マップ（固定テキスト返答） */
+/** 予約 → ハンドオフ開始 / 終了合図 */
+const wantsHandoffStart = (t="") =>
+  anyMatch(t, [/(予約|リザーブ|book|席|席取|取りたい|取れ|コース|貸切|人数|日時|希望)/]);
+const wantsHandoffEnd = (t="") =>
+  anyMatch(t, [/(予約終了|対応終了|終了|おわり|終わり|cancel|キャンセル完了)/]);
+
+/** 意図マップ（固定テキスト） */
 const INTENTS = [
   { key: "ランチメニュー", patterns: [/ランチ/, /(ﾒﾆｭｰ|メニュー|めにゅー)/, /(ごはん|フード|食事|昼|昼飯)/, /(日替|今日).*(おすすめ|本日)/, /(おすすめ).*(メニュー|ﾒﾆｭｰ|ランチ)/, /(見せて|教えて|おしえて).*(メニュー|ﾒﾆｭｰ|ランチ)/], replyKey: "ランチメニュー" },
   { key: "追加オプション", patterns: [/(追加|オプション|セット)/, /(ﾄﾞﾘﾝｸ|ドリンク|飲み物).*(ｾｯﾄ|セット|追加)/, /(ﾃﾞｻﾞｰﾄ|デザート|スイーツ)/], replyKey: "追加オプション" },
   { key: "営業時間", patterns: [/(営業時間|オープン|open|何時|いつまで|ラスト|lo|l\.o)/], replyKey: "営業時間" },
   { key: "定休日", patterns: [/(定休日|休み|休業|クローズ|close)/], replyKey: "定休日" },
-  { key: "アクセス", patterns: [/(場所|どこ|住所|行き方|道順|アクセス|地図|最寄|駅|南堀江|桜川)/], replyKey: "アクセス" },
+  { key: "アクセス", patterns: [/(場所|どこ|住所|行き方|道順|アクセス|地図|マップ|MAP|最寄|駅|南堀江|桜川)/], replyKey: "アクセス" },
   { key: "電話", patterns: [/(電話|tel|でんわ|連絡|問い合わせ|call|コール)/], replyKey: "電話" },
-  { key: "予約", patterns: [/(予約|リザーブ|book|席|貸切|コース|取りたい|取れ)/], replyKey: "予約" },
+  // 予約は固定文を返さず、ハンドオフへ誘導するのでここには入れない
   { key: "関連ワード", patterns: [/(関連|ﾜｰﾄﾞ|キーワード|keyword|ﾍﾙﾌﾟ|help|一覧)/], reply: () => relatedList() },
 ];
 
-/** AIに渡す“確定情報” */
+/** AIに渡す事実 */
 const FACTS = `
 【店舗名】${FIXED["店舗名"]}
 【住所】${FIXED["アクセス"]}
@@ -100,12 +135,12 @@ const FACTS = `
 ${FIXED["ランチメニュー"]}
 
 【ルール】
-- 回答は上記の事実のみから作成。推測・創作は禁止。
-- 事実にない項目は「公式情報をご確認ください」と案内。
+- 回答は上記の事実のみ。推測・創作は禁止。
+- 不明点は「公式情報をご確認ください」と案内。
 - 価格は税込み。ランチは無くなり次第終了。
 `;
 
-/** Webhook */
+/** ===== Webhook ===== */
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(200).send("ok");
   try {
@@ -120,9 +155,29 @@ export default async function handler(req, res) {
 async function handleEvent(event) {
   if (event.type !== "message" || event.message.type !== "text") return;
   const text = (event.message.text || "").trim();
-  console.log("[recv]", text);
+  const userId = event.source?.userId || "unknown";
+  console.log("[recv]", text, `user=${userId}`);
 
-  /** 0) あいさつ → 安全なウェルカム（AIに回さない） */
+  /** 0) まず「ハンドオフ終了」の合図を先に見る */
+  if (wantsHandoffEnd(text)) {
+    if (handoffGet(userId)) {
+      handoffClear(userId);
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "ありがとうございました。自動応答を再開します。\nご不明点は「ランチ」「アクセス」などとお送りください。",
+      });
+    }
+    // 既にハンドオフでなければ通常処理へ
+  }
+
+  /** 1) ハンドオフ中なら『完全に黙る』（返信しない） */
+  const ho = handoffGet(userId);
+  if (ho) {
+    console.log(`[handoff] silent (until ${new Date(ho.until).toISOString()}) user=${userId}`);
+    return; // 何も返さない
+  }
+
+  /** 2) あいさつ → ウェルカム */
   if (isGreeting(text)) {
     const welcome =
       `こんにちは！『${STORE_NAME}』のご案内です。\n` +
@@ -143,19 +198,19 @@ async function handleEvent(event) {
     });
   }
 
-  /** 0-A) アクセス系 → 位置情報（地図UIが開きます） */
+  /** 3) アクセス（地図）→ 位置情報 */
   if (wantsPlace(text)) {
-    console.log("[place] send location");
+    console.log(`[place] build=${BUILD} lat=${PLACE.lat} lng=${PLACE.lng}`);
     return client.replyMessage(event.replyToken, {
       type: "location",
-      title: "カフェポリフォニー",
-      address: "大阪市西区南堀江3-15-7 堀江ヴィラ 1F",
-      latitude: 34.6711232,   // ←店舗の緯度
-      longitude: 135.4877019, // ←店舗の経度
+      title: PLACE.title,
+      address: PLACE.address,
+      latitude: PLACE.lat,
+      longitude: PLACE.lng,
     });
   }
 
-  /** 0-B) メニュー画像の要望 → 画像メッセージで返す（ログ付き） */
+  /** 4) メニュー画像 */
   if (wantsMenuImage(text)) {
     console.log("[menu image send]", IMG.menu);
     return client.replyMessage(event.replyToken, {
@@ -165,7 +220,19 @@ async function handleEvent(event) {
     });
   }
 
-  /** 1) 部分一致の意図判定（固定返答 or 関連ワード） */
+  /** 5) 予約 → ハンドオフ開始（以降は黙る） */
+  if (wantsHandoffStart(text)) {
+    handoffSet(userId);
+    console.log(`[handoff] start user=${userId} ttlMin=${HANDOFF_TTL_MIN}`);
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text:
+        "スタッフにお繋ぎします。予約の希望日時・人数・お名前・電話番号などをメッセージでお送りください。\n" +
+        "※この間は自動応答を停止します。対応が終わったら「予約終了」と送ってください。",
+    });
+  }
+
+  /** 6) 固定返答（部分一致） */
   for (const intent of INTENTS) {
     if (anyMatch(text, intent.patterns)) {
       if (intent.replyKey && FIXED[intent.replyKey]) {
@@ -177,27 +244,21 @@ async function handleEvent(event) {
     }
   }
 
-  /** 2) 完全一致の固定返答（保険） */
+  /** 7) 完全一致の固定返答（保険） */
   if (FIXED[text]) {
     return client.replyMessage(event.replyToken, { type: "text", text: FIXED[text] });
   }
 
-  /** 3) それ以外は AI（確定情報を同梱、温度低め） */
+  /** 8) それ以外は AI（事実同梱） */
   try {
     const resp = await openai.responses.create({
       model: "gpt-4o-mini",
       temperature: 0.1,
       input: [
         { role: "system", content: "あなたはカフェの案内アシスタント。誤情報の出力は禁止です。" },
-        {
-          role: "user",
-          content:
-            `以下の「確定情報」の範囲だけで回答してください。不明な点は「公式情報をご確認ください」と案内してください。\n\n` +
-            FACTS + `\n\n【ユーザーの質問】\n${text}`
-        },
+        { role: "user", content: `以下の「確定情報」だけで回答してください。不明な点は「公式情報をご確認ください」と案内してください。\n\n${FACTS}\n\n【ユーザーの質問】\n${text}` },
       ],
     });
-
     const aiText =
       resp.output_text?.trim() ||
       (resp.output?.[0]?.content?.[0]?.text?.value ?? "すみません、うまく答えられませんでした。");
@@ -206,7 +267,7 @@ async function handleEvent(event) {
     console.error("[openai]", err?.name, err?.message);
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "（AI応答でエラーが出ました）\n「ランチ」「営業時間」「アクセス」「電話」「予約」「メニュー見せて」などでお試しください。",
+      text: "（AI応答でエラーが出ました）\n「ランチ」「営業時間」「アクセス」「予約」「メニュー見せて」などでお試しください。",
     });
   }
 }
