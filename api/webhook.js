@@ -105,7 +105,7 @@ const wantsMenuImage = (t="") =>
 
 /** アクセス（地図） */
 const wantsPlace = (t="") =>
-  anyMatch(t, [/(アクセス|場所|どこ|地図|map|行き方|道順|住所|最寄|駅|南堀江|桜川)/]);
+  anyMatch(t, [/(アクセス|場所|どこ|地図|マップ|map|行き方|道順|住所|最寄|駅|南堀江|桜川)/]);
 
 /** 予約 → ハンドオフ開始 / 終了合図 */
 const wantsHandoffStart = (t="") =>
